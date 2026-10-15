@@ -52,4 +52,4 @@ Fonts come from Google Fonts: Unbounded for display, Onest for body text.
 
 ## Hosting
 
-Not published yet; the owner wants it local for now. GitHub CLI is logged in as `kh-mitya`, so GitHub Pages is the easy option when asked. Any static host works.
+Published on GitHub Pages: https://kh-mitya.github.io/versta/ (public repo `kh-mitya/versta`, served from `main`, root). A push to `main` redeploys in a minute or two, so only push when the owner says so. Port 8765 may be held by an old preview server from another folder: check what `localhost:8765` actually serves before trusting it.
