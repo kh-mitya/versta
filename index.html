@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Верста</title>
+<meta name="description" content="Расстояние между городами России по дорогам и стоимость поездки по цене за километр.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Layout: narrow control column on the left, the route map fills the rest; stacks on phones. */
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --fg: #16191f;
+  --muted: #6b7280;
+  --line: #e2e5ea;
+  --accent: #1f4fd1;        /* road-sign blue */
+  --accent-soft: #e6ecfb;
+  --mark: #f2b705;          /* road-marking yellow */
+  --danger: #b42318;
+  --font-display: "Unbounded", "Onest", system-ui, sans-serif;
+  --font-body: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --r: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --panel: #171a21; --fg: #eef0f4; --muted: #8b93a3; --line: #262b35;
+    --accent: #6f95ff; --accent-soft: #1b2440; --mark: #f2c53d; --danger: #ff7a6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --panel: #171a21; --fg: #eef0f4; --muted: #8b93a3; --line: #262b35;
+  --accent: #6f95ff; --accent-soft: #1b2440; --mark: #f2c53d; --danger: #ff7a6b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.45 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+.app { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; height: 100%; }
+.side {
+  background: var(--panel); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 28px; overflow-y: auto;
+  padding-block: 32px; padding-left: max(28px, env(safe-area-inset-left, 0px)); padding-right: 28px;
+}
+.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.brand h1 { font: 700 20px/1 var(--font-display); letter-spacing: -0.01em; margin: 0; }
+.brand span { color: var(--muted); font-size: 13px; }
+
+/* Route fields joined by a dashed centre line */
+.route { position: relative; display: grid; gap: 10px; }
+.route::before {
+  content: ""; position: absolute; left: 21px; top: 30px; bottom: 30px; width: 2px;
+  background: repeating-linear-gradient(to bottom, var(--mark) 0 6px, transparent 6px 12px);
+}
+.field { position: relative; }
+.field .dot {
+  position: absolute; left: 15px; top: 50%; width: 14px; height: 14px; margin-top: -7px;
+  border-radius: 50%; border: 3px solid var(--accent); background: var(--panel); z-index: 1;
+}
+.field.to .dot { background: var(--accent); }
+.input {
+  width: 100%; height: 52px; padding: 0 44px 0 44px;
+  font: 500 16px var(--font-body); color: var(--fg);
+  background: var(--bg); border: 1px solid transparent; border-radius: var(--r);
+  outline: none; transition: border-color .15s, background .15s;
+}
+.input::placeholder { color: var(--muted); font-weight: 400; }
+.input:focus { border-color: var(--accent); background: var(--panel); }
+.swap {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--panel); color: var(--muted); cursor: pointer;
+  display: grid; place-items: center; transition: color .15s, transform .25s;
+}
+.swap:hover { color: var(--accent); }
+.swap:active { transform: translateY(-50%) rotate(180deg); }
+.swap:focus-visible, .btn:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 1000;
+  margin: 0; padding: 6px; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: 0 12px 32px rgba(0,0,0,.14); max-height: 320px; overflow-y: auto;
+}
+.suggest li { padding: 9px 12px; border-radius: 10px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
+.suggest li small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.suggest li.active, .suggest li:hover { background: var(--accent-soft); }
+.suggest .hint { color: var(--muted); cursor: default; }
+.suggest .hint:hover { background: none; }
+
+.row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+.price { position: relative; flex: 1 1 160px; }
+.price label { position: absolute; left: 16px; top: 8px; font-size: 11px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.price .input { padding: 18px 64px 0 16px; font-variant-numeric: tabular-nums; }
+.price .unit { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.chip {
+  flex: 0 0 auto; height: 52px; padding: 0 16px; border-radius: var(--r);
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+  font: 500 14px var(--font-body); cursor: pointer; display: flex; align-items: center; gap: 8px;
+}
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* Result */
+.result { display: grid; gap: 18px; }
+.total { font: 700 clamp(38px, 9vw, 52px)/1 var(--font-display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; word-break: break-word; }
+.total .cur { color: var(--accent); }
+.formula { color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+.stat { padding-top: 14px; display: grid; gap: 2px; }
+.stat b { font: 600 20px var(--font-body); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.note { font-size: 13px; color: var(--muted); }
+.note.err { color: var(--danger); }
+.btn {
+  justify-self: start; height: 40px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--fg);
+  font: 500 14px var(--font-body); cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+.loading .total, .loading .stats { opacity: .35; transition: opacity .2s; }
+
+.foot { margin-top: auto; font-size: 12px; color: var(--muted); }
+.foot a { color: inherit; }
+
+#map { height: 100%; background: var(--bg); }
+.picker .maplibregl-popup-content { background: var(--panel); color: var(--fg); border-radius: 12px; padding: 6px; box-shadow: 0 10px 28px rgba(0,0,0,.2); }
+.picker.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--panel); }
+.picker.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--panel); }
+.picker.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--panel); }
+.picker.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--panel); }
+.pick { display: flex; gap: 4px; }
+.pick button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); font: 500 14px var(--font-body); cursor: pointer; }
+.pick button:hover { background: var(--accent-soft); }
+.pick .pin { width: 12px; height: 12px; border-width: 3px; box-shadow: none; }
+.pick .pin.end { outline-width: 2px; border-width: 2px; }
+.maphint { position: absolute; z-index: 500; left: 12px; top: 12px; padding: 6px 10px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); pointer-events: none; }
+.mapwrap { position: relative; min-width: 0; }
+.maplibregl-map { font: 13px var(--font-body); }
+.maplibregl-canvas { cursor: crosshair; }
+.pin { cursor: grab; width: 18px; height: 18px; border-radius: 50%; border: 5px solid var(--accent); background: var(--panel); box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+.pin.end { background: var(--accent); border-color: var(--panel); outline: 3px solid var(--accent); }
+
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  html, body { height: auto; }
+  .side {
+    border-right: 0; overflow: visible; gap: 24px; padding-block: 24px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  #map { height: 62vh; min-height: 380px; }
+  .foot { margin-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <h1>Верста</h1>
+      <span>по дорогам России, от адреса до адреса</span>
+    </div>
+
+    <div class="route">
+      <div class="field from">
+        <i class="dot"></i>
+        <input id="from" class="input" placeholder="Откуда: город или адрес" autocomplete="off" spellcheck="false" aria-label="Откуда">
+        <ul class="suggest" hidden></ul>
+      </div>
+      <div class="field to">
+        <i class="dot"></i>
+        <input id="to" class="input" placeholder="Куда: город или адрес" autocomplete="off" spellcheck="false" aria-label="Куда">
+        <ul class="suggest" hidden></ul>
+      </div>
+      <button class="swap" id="swap" title="Поменять местами" aria-label="Поменять местами">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4 3 8M7 4l4 4M17 20V4m0 16-4-4m4 4 4-4"/></svg>
+      </button>
+    </div>
+
+    <div class="row">
+      <div class="price">
+        <label for="price">Цена за 1 км</label>
+        <input id="price" class="input" inputmode="decimal" value="40">
+        <span class="unit">₽/км</span>
+      </div>
+      <button class="chip" id="round" aria-pressed="false">Туда и обратно</button>
+    </div>
+
+    <section class="result" id="result" aria-live="polite">
+      <div class="total" id="total">—</div>
+      <div class="formula" id="formula">Выберите два города</div>
+      <div class="stats">
+        <div class="stat"><b id="dist">—</b><span>по дороге</span></div>
+        <div class="stat"><b id="time">—</b><span>в пути</span></div>
+      </div>
+      <div class="note" id="note" hidden></div>
+      <button class="btn" id="copy" hidden>Скопировать расчёт</button>
+    </section>
+
+    <div class="foot">Поиск: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></div>
+  </aside>
+  <div class="mapwrap"><div id="map"></div><div class="maphint">Нажмите на карту, чтобы поставить точку. Метки можно перетаскивать</div></div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const CITIES = [
+  ["Москва",55.7558,37.6173],["Санкт-Петербург",59.9386,30.3141],["Новосибирск",55.0084,82.9357],
+  ["Екатеринбург",56.8389,60.6057],["Казань",55.7963,49.1088],["Нижний Новгород",56.3269,44.0059],
+  ["Челябинск",55.1644,61.4368],["Красноярск",56.0153,92.8932],["Самара",53.1959,50.1002],
+  ["Уфа",54.7388,55.9721],["Ростов-на-Дону",47.2357,39.7015],["Омск",54.9885,73.3242],
+  ["Краснодар",45.0355,38.9753],["Воронеж",51.6720,39.1843],["Пермь",58.0105,56.2502],
+  ["Волгоград",48.7080,44.5133],["Саратов",51.5331,46.0342],["Тюмень",57.1530,65.5343],
+  ["Тольятти",53.5303,49.3461],["Ижевск",56.8526,53.2045],["Барнаул",53.3561,83.7496],
+  ["Ульяновск",54.3142,48.4031],["Иркутск",52.2870,104.3050],["Хабаровск",48.4802,135.0719],
+  ["Ярославль",57.6261,39.8845],["Владивосток",43.1155,131.8855],["Махачкала",42.9831,47.5047],
+  ["Томск",56.4847,84.9482],["Оренбург",51.7682,55.0969],["Кемерово",55.3547,86.0873],
+  ["Новокузнецк",53.7557,87.1099],["Рязань",54.6269,39.6916],["Набережные Челны",55.7436,52.3958],
+  ["Астрахань",46.3479,48.0336],["Пенза",53.1959,45.0183],["Киров",58.6035,49.6680],
+  ["Липецк",52.6031,39.5708],["Чебоксары",56.1439,47.2489],["Калининград",54.7104,20.4522],
+  ["Тула",54.1931,37.6177],["Курск",51.7304,36.1926],["Ставрополь",45.0448,41.9691],
+  ["Сочи",43.5855,39.7231],["Улан-Удэ",51.8335,107.5841],["Тверь",56.8587,35.9176],
+  ["Магнитогорск",53.4072,58.9791],["Иваново",57.0004,40.9739],["Брянск",53.2434,34.3634],
+  ["Белгород",50.5997,36.5983],["Сургут",61.2540,73.3962],["Владимир",56.1290,40.4066],
+  ["Чита",52.0340,113.4994],["Архангельск",64.5393,40.5170],["Нижний Тагил",57.9101,59.9813],
+  ["Калуга",54.5293,36.2754],["Смоленск",54.7826,32.0453],["Волжский",48.7858,44.7797],
+  ["Курган",55.4410,65.3411],["Череповец",59.1333,37.9000],["Орёл",52.9703,36.0635],
+  ["Вологда",59.2181,39.8886],["Саранск",54.1838,45.1749],["Владикавказ",43.0205,44.6819],
+  ["Якутск",62.0281,129.7326],["Мурманск",68.9585,33.0827],["Подольск",55.4312,37.5446],
+  ["Тамбов",52.7212,41.4523],["Грозный",43.3178,45.6949],["Стерлитамак",53.6302,55.9300],
+  ["Петрозаводск",61.7849,34.3469],["Кострома",57.7677,40.9264],["Нижневартовск",60.9344,76.5531],
+  ["Новороссийск",44.7235,37.7686],["Йошкар-Ола",56.6344,47.8999],["Сыктывкар",61.6688,50.8364],
+  ["Псков",57.8136,28.3496],["Великий Новгород",58.5215,31.2755],["Нальчик",43.4853,43.6071],
+  ["Благовещенск",50.2907,127.5272],["Магадан",59.5612,150.8301],["Анапа",44.8951,37.3166],
+  ["Пятигорск",44.0486,43.0594],["Кисловодск",43.9133,42.7208],["Таганрог",47.2362,38.8969],
+  ["Ханты-Мансийск",61.0042,69.0019],["Салехард",66.5299,66.6136],["Новый Уренгой",66.0834,76.6809],
+  ["Абакан",53.7151,91.4292],["Кызыл",51.7191,94.4378],["Горно-Алтайск",51.9581,85.9603],
+  ["Братск",56.1514,101.6342],["Комсомольск-на-Амуре",50.5499,137.0079],["Элиста",46.3078,44.2558],
+  ["Майкоп",44.6098,40.1006],["Черкесск",44.2233,42.0578],["Дербент",42.0578,48.2887],
+  ["Тобольск",58.1981,68.2539],["Обнинск",55.0968,36.6101],["Сергиев Посад",56.3153,38.1359],
+  ["Суздаль",56.4198,40.4498],["Коломна",55.0794,38.7783],["Рыбинск",58.0446,38.8426],
+  ["Геленджик",44.5622,38.0848],["Туапсе",44.0985,39.0746],["Выборг",60.7096,28.7490],
+  ["Северодвинск",64.5635,39.8302],["Ухта",63.5672,53.6835],["Южно-Сахалинск",46.9591,142.7380],
+  ["Петропавловск-Камчатский",53.0241,158.6435],["Великие Луки",56.3400,30.5452],["Златоуст",55.1711,59.6508],
+  ["Миасс",55.0457,60.1077],["Альметьевск",54.9014,52.2973],["Энгельс",51.4985,46.1250],
+  ["Сызрань",53.1558,48.4745],["Старый Оскол",51.2981,37.8350],["Армавир",44.9892,41.1234],
+].map(([name, lat, lon]) => ({ name, lat, lon, key: norm(name) }));
+
+function norm(s) { return s.toLowerCase().replace(/ё/g, "е").replace(/[\s\-]+/g, " ").trim(); }
+
+const $ = id => document.getElementById(id);
+const nf = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+const state = { from: null, to: null, route: null, round: false };
+
+/* ---------- storage (best effort) ---------- */
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem("versta:" + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem("versta:" + k, JSON.stringify(v)); } catch {} },
+};
+
+/* ---------- map (OpenFreeMap vector tiles: fresh OSM data, incl. new roads like M-12) ---------- */
+const dark = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : dark.matches;
+const styleUrl = () => `https://tiles.openfreemap.org/styles/${isDark() ? "dark" : "liberty"}`;
+const map = new maplibregl.Map({ container: "map", style: styleUrl(), center: [60, 56], zoom: 3, attributionControl: false, dragRotate: false, pitchWithRotate: false });
+map.touchZoomRotate.disableRotation();
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+const EMPTY = { type: "FeatureCollection", features: [] };
+
+map.on("style.load", () => {
+  // Russian labels everywhere; road shields (ref) stay as they are.
+  const ru = ["coalesce", ["get", "name:ru"], ["get", "name"]];
+  let firstSymbol;
+  for (const l of map.getStyle().layers) {
+    if (l.type !== "symbol") continue;
+    firstSymbol ??= l.id;
+    const tf = JSON.stringify(l.layout?.["text-field"] ?? "");
+    if (tf.includes("name") && !tf.includes("ref")) map.setLayoutProperty(l.id, "text-field", ru);
+  }
+  map.addSource("route", { type: "geojson", data: EMPTY });
+  map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": isDark() ? "#0f1115" : "#ffffff", "line-width": 9, "line-opacity": .9 } }, firstSymbol);
+  map.addLayer({ id: "route-line", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": accent(), "line-width": 5 } }, firstSymbol);
+  drawMap(false);
+});
+dark.addEventListener?.("change", () => map.setStyle(styleUrl(), { diff: false })); // full reload so style.load re-adds the route and Russian labels
+
+const markers = {};
+function marker(which) {
+  if (markers[which]) return markers[which];
+  const el = document.createElement("div");
+  el.className = "pin" + (which === "to" ? " end" : "");
+  const m = new maplibregl.Marker({ element: el, draggable: true });
+  m.on("dragend", () => { const { lat, lng } = m.getLngLat(); setPoint(which, lat, lng); });
+  return (markers[which] = m);
+}
+
+function drawMap(fit = true) {
+  ["from", "to"].forEach(which => {
+    const p = state[which];
+    if (!p) { markers[which]?.remove(); return; }
+    const m = marker(which);
+    m.setLngLat([p.lon, p.lat]).addTo(map);
+    m.getElement().title = p.name;
+  });
+  const pts = [state.from, state.to].filter(Boolean);
+  let coords = null, approx = false;
+  if (state.route?.geometry) coords = state.route.geometry;
+  else if (pts.length === 2 && state.route?.kind === "approx") { coords = pts.map(p => [p.lon, p.lat]); approx = true; }
+  if (map.getLayer("route-line")) map.setPaintProperty("route-line", "line-dasharray", approx ? [1.5, 2] : undefined);
+  map.getSource("route")?.setData(coords
+    ? { type: "Feature", properties: { approx }, geometry: { type: "LineString", coordinates: coords } }
+    : EMPTY);
+  if (!fit) return;
+  const all = coords || (pts.length === 2 ? pts.map(p => [p.lon, p.lat]) : null);
+  if (all) {
+    const b = all.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(all[0], all[0]));
+    map.fitBounds(b, { padding: 56, maxZoom: 15, animate: false });
+  } else if (pts.length) {
+    map.jumpTo({ center: [pts[0].lon, pts[0].lat], zoom: Math.max(map.getZoom(), 9) });
+  }
+}
+let rz;
+new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => { map.resize(); drawMap(); }, 150); }).observe($("map"));
+
+/* ---------- pick points on the map ---------- */
+const picker = new maplibregl.Popup({ closeButton: false, className: "picker", offset: 8 });
+map.on("click", e => {
+  if (e.originalEvent.target.closest?.(".pin")) return;
+  const { lat, lng } = e.lngLat;
+  const box = document.createElement("div");
+  box.className = "pick";
+  box.innerHTML = `<button data-w="from"><i class="pin"></i>Отсюда</button><button data-w="to"><i class="pin end"></i>Сюда</button>`;
+  box.addEventListener("click", ev => {
+    const btn = ev.target.closest("button");
+    if (!btn) return;
+    picker.remove();
+    setPoint(btn.dataset.w, lat, lng);
+  });
+  picker.setLngLat(e.lngLat).setDOMContent(box).addTo(map);
+});
+
+async function setPoint(which, lat, lon) {
+  const p = { name: `Точка ${lat.toFixed(4)}, ${lon.toFixed(4)}`, lat, lon };
+  state[which] = p;
+  fields[which].set(p);
+  update(false);
+  try {
+    const data = await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1`)).json();
+    const f = data.features?.[0];
+    if (!f || state[which] !== p) return;
+    const place = toPlace(f), q = f.properties;
+    const street = place.street || (q.osm_key === "highway" ? q.name : "");
+    p.name = street ? [street, place.town].filter(Boolean).join(", ") : (place.full || place.name);
+    fields[which].set(p);
+    store.set(which, p);
+    render(); drawMap(false);
+  } catch {}
+}
+
+
+function toPlace(f) {
+  const p = f.properties, [lon, lat] = f.geometry.coordinates;
+  const town = p.city || p.town || p.village || p.locality || p.county || "";
+  const street = p.street ? p.street + (p.housenumber ? ", " + p.housenumber : "") : "";
+  let name = p.name || street || town;
+  if (p.osm_key === "place" && ["city", "town", "village", "hamlet"].includes(p.osm_value)) {
+    return { name, region: p.state || "", lat, lon };
+  }
+  if (!p.name && street) name = street;
+  else if (p.name && street && p.name !== p.street && p.osm_key !== "highway") name = p.name + ", " + street;
+  const where = [...new Set([town !== name ? town : "", p.state].filter(Boolean))].join(", ");
+  return { name, region: where, full: [name, town].filter(Boolean).join(", "), addr: street && norm(street + "|" + town), street, town, lat, lon };
+}
+/* ---------- autocomplete ---------- */
+function setupField(input, which) {
+  const list = input.parentElement.querySelector(".suggest");
+  let items = [], active = -1, timer, seq = 0;
+
+  function render() {
+    list.innerHTML = "";
+    if (!items.length) { list.hidden = true; return; }
+    items.forEach((it, i) => {
+      const li = document.createElement("li");
+      if (it.hint) { li.className = "hint"; li.textContent = it.hint; }
+      else {
+        li.innerHTML = `<span></span><small></small>`;
+        li.firstChild.textContent = it.name;
+        li.lastChild.textContent = it.region || "";
+        if (i === active) li.className = "active";
+        li.addEventListener("mousedown", e => { e.preventDefault(); choose(it); });
+      }
+      list.appendChild(li);
+    });
+    list.hidden = false;
+  }
+  function choose(it) {
+    const label = it.full || it.name;
+    input.value = label;
+    state[which] = { name: label, lat: it.lat, lon: it.lon };
+    items = []; render(); input.blur();
+    store.set(which, state[which]);
+    update();
+  }
+  function search() {
+    const q = norm(input.value), my = ++seq; // ++seq also drops answers to older queries
+    active = 0;
+    clearTimeout(timer);
+    if (!q) { items = []; render(); return; }
+    const local = CITIES.filter(c => c.key.startsWith(q))
+      .concat(CITIES.filter(c => !c.key.startsWith(q) && c.key.includes(q))).slice(0, 7);
+    items = local.slice();
+    if (!items.length && q.length >= 3) items = [{ hint: "Ищем…" }];
+    render();
+    if (q.length < 3) return;
+    timer = setTimeout(async () => {
+      try {
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(input.value)}&limit=20&bbox=19,41,180,82`;
+        const data = await (await fetch(url)).json();
+        if (my !== seq) return;
+        const seen = new Set(local.map(c => c.key));
+        const remote = data.features
+          .filter(f => f.properties.countrycode === "RU")
+          .map(toPlace)
+          .filter(r => { const k = r.addr || norm(r.name + "|" + r.region); if (seen.has(k) || (!r.region && seen.has(norm(r.name)))) return false; seen.add(k); return true; });
+        items = local.slice(0, 4).concat(remote).slice(0, 9);
+        if (!items.length) items = [{ hint: "Ничего не нашли. Попробуйте «город, улица, дом»" }];
+        render();
+      } catch {
+        if (my === seq && !local.length) { items = [{ hint: "Поиск адресов недоступен, выберите город из списка" }]; render(); }
+      }
+    }, 300);
+  }
+  input.addEventListener("input", () => {
+    if (state[which]) { state[which] = null; update(); }
+    search();
+  });
+  input.addEventListener("focus", () => { input.select(); if (input.value && !state[which]) search(); });
+  input.addEventListener("blur", () => { setTimeout(() => { list.hidden = true; }, 100); });
+  input.addEventListener("keydown", e => {
+    const real = items.filter(i => !i.hint);
+    if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(active + 1, real.length - 1); render(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(active - 1, 0); render(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (real[active]) choose(real[active]); }
+    else if (e.key === "Escape") { list.hidden = true; }
+  });
+  return { set(p) { input.value = p ? p.name : ""; } };
+}
+var fields = { from: setupField($("from"), "from"), to: setupField($("to"), "to") };
+
+/* ---------- routing ---------- */
+const cache = new Map();
+let ctrl;
+function haversine(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+async function getRoute(a, b) {
+  const key = [a.lat, a.lon, b.lat, b.lon].join(",");
+  if (cache.has(key)) return cache.get(key);
+  ctrl?.abort(); ctrl = new AbortController();
+  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson`;
+  const res = await fetch(url, { signal: ctrl.signal });
+  const data = await res.json();
+  let r;
+  if (data.code === "Ok" && data.routes?.length) {
+    const rt = data.routes[0];
+    r = { km: rt.distance / 1000, sec: rt.duration, geometry: rt.geometry.coordinates, kind: "road" };
+  } else if (data.code === "NoRoute") {
+    r = { kind: "noroad" };
+  } else throw new Error(data.code || "error");
+  cache.set(key, r);
+  return r;
+}
+
+async function update(fit = true) {
+  drawMap(fit);
+  if (!state.from || !state.to) { state.route = null; $("result").classList.remove("loading"); render(); return; }
+  const { from, to } = state;
+  $("result").classList.add("loading");
+  try {
+    const r = await getRoute(from, to);
+    if (state.from !== from || state.to !== to) return; // a newer update() owns the loading state
+    state.route = r;
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    state.route = { km: haversine(from, to) * 1.25, sec: null, kind: "approx" };
+  }
+  $("result").classList.remove("loading");
+  render(); drawMap(fit);
+}
+
+/* ---------- output ---------- */
+function price() { const v = parseFloat($("price").value.replace(/\s/g, "").replace(",", ".")); return isFinite(v) && v >= 0 ? v : 0; }
+function fmtTime(sec) {
+  if (sec == null) return "—";
+  const m = Math.round(sec / 60), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  if (d) return `${d} д ${h} ч`;
+  return h ? `${h} ч ${mm} мин` : `${mm} мин`;
+}
+function render() {
+  const r = state.route, note = $("note");
+  note.hidden = true; note.className = "note"; $("copy").hidden = true;
+  if (!state.from || !state.to || !r) {
+    $("total").textContent = "—"; $("dist").textContent = "—"; $("time").textContent = "—";
+    $("formula").textContent = state.from || state.to ? "Выберите второй город" : "Выберите два города";
+    return;
+  }
+  if (r.kind === "noroad") {
+    $("total").textContent = "—"; $("dist").textContent = "—"; $("time").textContent = "—";
+    $("formula").textContent = `${state.from.name} → ${state.to.name}`;
+    note.textContent = "Между этими пунктами нет автомобильной дороги. Так бывает с Камчаткой, Норильском и другими местами, куда добираются самолётом или морем.";
+    note.className = "note err"; note.hidden = false;
+    return;
+  }
+  const k = state.round ? 2 : 1;
+  const km = Math.round(r.km) * k, p = price(), sum = Math.round(km * p);
+  $("total").innerHTML = `${nf.format(sum)}<span class="cur">&nbsp;₽</span>`;
+  $("formula").textContent = `${nf.format(km)} км × ${String(p).replace(".", ",")} ₽${state.round ? " · туда и обратно" : ""}`;
+  $("dist").textContent = `${nf.format(km)} км`;
+  $("time").textContent = fmtTime(r.sec != null ? r.sec * k : null);
+  if (r.kind === "approx") {
+    note.textContent = "Сервис маршрутов сейчас не ответил. Показана оценка: прямая × 1,25.";
+    note.hidden = false;
+  }
+  $("copy").hidden = false;
+}
+
+$("price").addEventListener("input", () => { store.set("price", $("price").value); render(); });
+$("round").addEventListener("click", e => {
+  state.round = !state.round; e.currentTarget.setAttribute("aria-pressed", state.round);
+  store.set("round", state.round); render();
+});
+$("swap").addEventListener("click", () => {
+  [state.from, state.to] = [state.to, state.from];
+  fields.from.set(state.from); fields.to.set(state.to);
+  store.set("from", state.from); store.set("to", state.to);
+  update();
+});
+function copyText(text) {
+  // Synchronous fallback first: works from a local file and in every browser.
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  if (ok) return Promise.resolve();
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  return Promise.reject(new Error("no clipboard"));
+}
+$("copy").addEventListener("click", () => {
+  const btn = $("copy"), r = state.route;
+  const lines = [
+    `${state.from.name} → ${state.to.name}${state.round ? " и обратно" : ""}`,
+    `Расстояние: ${$("dist").textContent}${r?.kind === "approx" ? " (оценка)" : " по дорогам"}`,
+    $("time").textContent !== "—" ? `В пути: ${$("time").textContent}` : "",
+    `Цена: ${$("formula").textContent.split(" · ")[0]}`,
+    `Итого: ${$("total").textContent.replace(/\u00a0/g, " ")}`,
+  ].filter(Boolean);
+  copyText(lines.join("\n"))
+    .then(() => { btn.textContent = "✓ Скопировано"; btn.classList.add("done"); })
+    .catch(() => { btn.textContent = "Не удалось скопировать"; })
+    .finally(() => setTimeout(() => { btn.textContent = "Скопировать расчёт"; btn.classList.remove("done"); }, 1800));
+});
+
+/* ---------- self-check of the money math: open with #test, see the console ---------- */
+if (location.hash === "#test") {
+  for (const [v, want] of [["40", 40], ["1 000,5", 1000.5], ["-5", 0], ["abc", 0]]) {
+    $("price").value = v; console.assert(price() === want, "price", v, price());
+  }
+  console.assert(fmtTime(90000) === "1 д 1 ч" && fmtTime(5400) === "1 ч 30 мин", "fmtTime");
+  Object.assign(state, { from: { name: "A" }, to: { name: "B" }, route: { km: 834.4, sec: 36000, kind: "road" }, round: true });
+  $("price").value = "40"; render();
+  console.assert($("total").textContent.replace(/\s/g, "") === "66720₽", "total", $("total").textContent);
+  console.log("versta self-check done");
+}
+
+/* ---------- start with a real example ---------- */
+const savedPrice = store.get("price"); if (savedPrice != null) $("price").value = savedPrice;
+state.round = !!store.get("round"); $("round").setAttribute("aria-pressed", state.round);
+state.from = store.get("from") || { name: "Москва", lat: 55.7558, lon: 37.6173 };
+state.to = store.get("to") || { name: "Казань", lat: 55.7963, lon: 49.1088 };
+fields.from.set(state.from); fields.to.set(state.to);
+update();
+</script>
+</body>
+</html>
