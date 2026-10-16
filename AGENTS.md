@@ -16,7 +16,7 @@ Opening `index.html` directly from disk (`file://`) must keep working, since tha
 | Address / city search | Photon (komoot) | `https://photon.komoot.io/api/?q=…&bbox=19,41,180,82` |
 | Reverse geocoding (map clicks, dragged pins) | Photon | `https://photon.komoot.io/reverse?lat=…&lon=…` |
 | Routing, km and travel time | OSRM public demo | `https://router.project-osrm.org/route/v1/driving/…?overview=full&geometries=geojson` |
-| Map rendering | MapLibre GL 4.7.1 (unpkg) + OpenFreeMap vector styles | `https://tiles.openfreemap.org/styles/liberty` (light), `/styles/dark` (dark) |
+| Map rendering | MapLibre GL 4.7.1 (unpkg) + OpenFreeMap vector styles | `https://tiles.openfreemap.org/styles/liberty` (always light, also in dark mode) |
 
 Fonts come from Google Fonts: Unbounded for display, Onest for body text.
 
@@ -38,6 +38,7 @@ Fonts come from Google Fonts: Unbounded for display, Onest for body text.
 - CARTO basemaps now require an API key and show "API KEY REQUIRED" tiles.
 - `tile.openstreetmap.org` requires a Referer header, and `file://` pages don't send one. Avoid it.
 - OSRM `overview=simplified` gives about 27 points for Moscow → Kazan, which draws as straight chords that look like a railway. Keep `overview=full`.
+- The OpenFreeMap dark style was hard to read, so the map stays light in dark mode: `#map` re-scopes the light color tokens for pins, route and popup.
 - Leaflet/MapLibre: fit the map *after* the container has its final size. A `ResizeObserver` on `#map` handles this. Don't animate fits.
 - A claude.ai Artifact cannot host this app because its sandbox blocks all fetch, XHR and tile requests to other hosts. An offline variant would need a precomputed distance matrix, which limits it to a fixed city list. The owner wants arbitrary addresses, so the app stays a regular static site.
 - OSRM's demo server can be slow or rate-limited, and some routes cross other countries (Kaliningrad goes via Lithuania). Toll roads (M-11, M-12) are not excluded and their tolls aren't added.
