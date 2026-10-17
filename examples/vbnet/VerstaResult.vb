@@ -24,7 +24,7 @@ Public Class VerstaResult
     ''' <summary>Итог в рублях: Km × PricePerKm, округлён до рубля.</summary>
     Public Property Total As Decimal
     Public Property Currency As String
-    ''' <summary>True, если сервис маршрутов не ответил и расстояние оценочное.</summary>
+    ''' <summary>True, если сервис маршрутов не ответил и расстояние примерное (прямая × 1,25). Стоит предупредить пользователя.</summary>
     Public Property Estimate As Boolean
 
     Private Shared ReadOnly Options As New JsonSerializerOptions With {.PropertyNameCaseInsensitive = True}
@@ -47,7 +47,7 @@ Public Module VerstaLink
             "to=" & Uri.EscapeDataString(toAddress),
             "price=" & pricePerKm.ToString(Globalization.CultureInfo.InvariantCulture)
         }
-        If roundTrip Then q.Add("round=1")
+        q.Add("round=" & If(roundTrip, "1", "0"))
         If Not String.IsNullOrEmpty(ref) Then q.Add("ref=" & Uri.EscapeDataString(ref))
         If Not String.IsNullOrEmpty(callback) Then q.Add("callback=" & Uri.EscapeDataString(callback))
         Return SiteUrl & "?" & String.Join("&", q)

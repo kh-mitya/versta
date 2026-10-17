@@ -545,7 +545,7 @@ function render() {
     note.hidden = false;
   }
   $("copy").hidden = false;
-  $("send").hidden = !link.target;
+  $("send").hidden = false;
 }
 
 $("price").addEventListener("input", () => { store.set("price", $("price").value); render(); });
@@ -588,32 +588,17 @@ $("copy").addEventListener("click", () => {
 });
 
 /* ---------- self-check of the money math: open with #test, see the console ---------- */
-if (location.hash === "#test") {
-  for (const [v, want] of [["40", 40], ["1 000,5", 1000.5], ["-5", 0], ["abc", 0]]) {
-    $("price").value = v; console.assert(price() === want, "price", v, price());
-  }
-  console.assert(fmtTime(90000) === "1 д 1 ч" && fmtTime(5400) === "1 ч 30 мин", "fmtTime");
-  Object.assign(state, { from: { name: "A" }, to: { name: "B" }, route: { km: 834.4, sec: 36000, kind: "road" }, round: true });
-  $("price").value = "40"; render();
-  console.assert($("total").textContent.replace(/\s/g, "") === "66720₽", "total", $("total").textContent);
-  console.log("versta self-check done");
-}
-
 /* ---------- link with a program ----------
-   In:  ?from=…&to=…&price=40&round=1&ref=… (text address or "lat,lon"),
-        or, inside WebView2, a message {from, to, price, round, ref}.
-   Out: "Отправить в программу" sends the calculation as JSON to WebView2
-        (chrome.webview.postMessage) or POSTs it to ?callback=http://localhost:PORT/… */
-const link = { ref: null, target: null, callback: null };
-const webview = window.chrome?.webview;
-if (webview) link.target = "webview";
+   In:  ?from=…&to=…&price=40&round=1&ref=… (text address or "lat,lon").
+   Out: "Отправить в программу" POSTs the calculation as JSON to the program's
+        listener: ?callback=… if given (localhost only), else the default below. */
+const link = { ref: null, callback: "http://localhost:5055/versta/" };
 
 function isLocalUrl(u) {
   try { const h = new URL(u).hostname; return ["localhost", "127.0.0.1", "[::1]"].includes(h); } catch { return false; }
 }
 
 async function resolvePlace(q) {
-  if (q && typeof q === "object" && isFinite(q.lat) && isFinite(q.lon)) return { name: q.name || `${q.lat}, ${q.lon}`, lat: +q.lat, lon: +q.lon };
   q = String(q || "").trim();
   if (!q) return null;
   const m = q.match(/^(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)$/);
@@ -628,12 +613,11 @@ async function resolvePlace(q) {
 }
 
 async function applyRequest(req) {
-  if (req.ref != null) link.ref = String(req.ref);
+  link.ref = req.ref != null ? String(req.ref) : null;
   if (req.price != null && req.price !== "") { $("price").value = String(req.price); store.set("price", $("price").value); }
-  if (req.round != null) {
-    state.round = ["1", "true", "yes", "да"].includes(String(req.round).toLowerCase());
-    $("round").setAttribute("aria-pressed", state.round);
-  }
+  // a missing round means one way, never "whatever was clicked last time"
+  state.round = ["1", "true", "yes", "да"].includes(String(req.round ?? "").toLowerCase());
+  $("round").setAttribute("aria-pressed", state.round);
   if (req.from == null && req.to == null) { render(); return; }
   $("formula").textContent = "Ищем адреса…";
   const missing = [];
@@ -669,21 +653,13 @@ $("send").addEventListener("click", async () => {
   const btn = $("send"), body = calcPayload();
   let ok = false;
   try {
-    if (link.target === "webview") { webview.postMessage(body); ok = true; }
-    else {
-      const res = await fetch(link.callback, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
-      ok = res.ok;
-    }
+    // text/plain keeps it a "simple" request: no CORS preflight for the program to answer
+    const res = await fetch(link.callback, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+    ok = res.ok;
   } catch {}
-  btn.textContent = ok ? "✓ Отправлено" : "Программа не ответила";
+  btn.textContent = ok ? "✓ Отправлено" : "Программа не ответила. Она запущена?";
   btn.classList.toggle("done", ok);
   setTimeout(() => { btn.textContent = "Отправить в программу"; btn.classList.remove("done"); }, 2000);
-});
-
-webview?.addEventListener("message", e => {
-  let d = e.data;
-  if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
-  if (d && typeof d === "object") applyRequest(d);
 });
 
 /* ---------- start with a real example ---------- */
@@ -694,9 +670,22 @@ state.to = store.get("to") || { name: "Казань", lat: 55.7963, lon: 49.1088
 fields.from.set(state.from); fields.to.set(state.to);
 const params = new URLSearchParams(location.search);
 const cb = params.get("callback");
-if (cb && isLocalUrl(cb) && !link.target) { link.callback = cb; link.target = "callback"; }
+if (cb && isLocalUrl(cb)) link.callback = cb;
 if (["from", "to", "price", "round", "ref"].some(k => params.has(k))) applyRequest(Object.fromEntries(params));
 else update();
+
+if (location.hash === "#test") {
+  for (const [v, want] of [["40", 40], ["1 000,5", 1000.5], ["-5", 0], ["abc", 0]]) {
+    $("price").value = v; console.assert(price() === want, "price", v, price());
+  }
+  console.assert(fmtTime(90000) === "1 д 1 ч" && fmtTime(5400) === "1 ч 30 мин", "fmtTime");
+  Object.assign(state, { from: { name: "A", lat: 55.75, lon: 37.62 }, to: { name: "B", lat: 55.79, lon: 49.11 }, route: { km: 834.4, sec: 36000, kind: "road" }, round: true });
+  $("price").value = "40"; render();
+  console.assert($("total").textContent.replace(/\s/g, "") === "66720₽", "total", $("total").textContent);
+  const pl = calcPayload();
+  console.assert(pl.km === 1668 && pl.total === 66720 && pl.minutes === 1200 && pl.roundTrip, "payload", pl);
+  console.log("versta self-check done");
+}
 </script>
 </body>
 </html>
