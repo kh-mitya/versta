@@ -127,6 +127,9 @@ body {
   font: 500 14px var(--font-body); cursor: pointer;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { color: #fff; opacity: .9; }
 .btn.done { background: var(--accent); border-color: var(--accent); color: #fff; }
 .loading .total, .loading .stats { opacity: .35; transition: opacity .2s; }
 
@@ -214,7 +217,10 @@ body {
         <div class="stat"><b id="time">—</b><span>в пути</span></div>
       </div>
       <div class="note" id="note" hidden></div>
-      <button class="btn" id="copy" hidden>Скопировать расчёт</button>
+      <div class="actions">
+        <button class="btn primary" id="send" hidden>Отправить в программу</button>
+        <button class="btn" id="copy" hidden>Скопировать расчёт</button>
+      </div>
     </section>
 
     <div class="foot"><span>Поиск: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></span>
@@ -522,7 +528,7 @@ function fmtTime(sec) {
 }
 function render() {
   const r = state.route, note = $("note");
-  note.hidden = true; note.className = "note"; $("copy").hidden = true;
+  note.hidden = true; note.className = "note"; $("copy").hidden = true; $("send").hidden = true;
   if (!state.from || !state.to || !r) {
     $("total").textContent = "—"; $("dist").textContent = "—"; $("time").textContent = "—";
     $("formula").textContent = state.from || state.to ? "Выберите второй город" : "Выберите два города";
@@ -546,6 +552,7 @@ function render() {
     note.hidden = false;
   }
   $("copy").hidden = false;
+  $("send").hidden = false;
 }
 
 $("price").addEventListener("input", () => { store.set("price", $("price").value); render(); });
@@ -588,16 +595,79 @@ $("copy").addEventListener("click", () => {
 });
 
 /* ---------- self-check of the money math: open with #test, see the console ---------- */
-if (location.hash === "#test") {
-  for (const [v, want] of [["40", 40], ["1 000,5", 1000.5], ["-5", 0], ["abc", 0]]) {
-    $("price").value = v; console.assert(price() === want, "price", v, price());
-  }
-  console.assert(fmtTime(90000) === "1 д 1 ч" && fmtTime(5400) === "1 ч 30 мин", "fmtTime");
-  Object.assign(state, { from: { name: "A" }, to: { name: "B" }, route: { km: 834.4, sec: 36000, kind: "road" }, round: true });
-  $("price").value = "40"; render();
-  console.assert($("total").textContent.replace(/\s/g, "") === "66720₽", "total", $("total").textContent);
-  console.log("versta self-check done");
+/* ---------- link with a program ----------
+   In:  ?from=…&to=…&price=40&round=1&ref=… (text address or "lat,lon").
+   Out: "Отправить в программу" POSTs the calculation as JSON to the program's
+        listener: ?callback=… if given (localhost only), else the default below. */
+const link = { ref: null, callback: "http://localhost:5055/versta/" };
+
+function isLocalUrl(u) {
+  try { const h = new URL(u).hostname; return ["localhost", "127.0.0.1", "[::1]"].includes(h); } catch { return false; }
 }
+
+async function resolvePlace(q) {
+  q = String(q || "").trim();
+  if (!q) return null;
+  const m = q.match(/^(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)$/);
+  if (m) return { name: q, lat: +m[1], lon: +m[2] };
+  const city = CITIES.find(c => c.key === norm(q));
+  if (city) return { name: city.name, lat: city.lat, lon: city.lon };
+  const data = await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&bbox=19,41,180,82`)).json();
+  const f = data.features.find(f => f.properties.countrycode === "RU");
+  if (!f) return null;
+  const pl = toPlace(f);
+  return { name: pl.full || pl.name, lat: pl.lat, lon: pl.lon };
+}
+
+async function applyRequest(req) {
+  link.ref = req.ref != null ? String(req.ref) : null;
+  if (req.price != null && req.price !== "") { $("price").value = String(req.price); store.set("price", $("price").value); }
+  // a missing round means one way, never "whatever was clicked last time"
+  state.round = ["1", "true", "yes", "да"].includes(String(req.round ?? "").toLowerCase());
+  $("round").setAttribute("aria-pressed", state.round);
+  if (req.from == null && req.to == null) { render(); return; }
+  $("formula").textContent = "Ищем адреса…";
+  const missing = [];
+  for (const which of ["from", "to"]) {
+    if (req[which] == null || req[which] === "") continue;
+    let p = null;
+    try { p = await resolvePlace(req[which]); } catch {}
+    if (p) { state[which] = p; store.set(which, p); }
+    else { state[which] = null; missing.push(String(req[which])); }
+    fields[which].set(p || { name: String(req[which]) });
+  }
+  await update();
+  if (missing.length) {
+    const note = $("note");
+    note.textContent = `Не нашли: ${missing.join(", ")}. Уточните адрес в поле.`;
+    note.className = "note err"; note.hidden = false;
+  }
+}
+
+function calcPayload() {
+  const r = state.route, k = state.round ? 2 : 1;
+  const km = Math.round(r.km) * k, p = price();
+  return {
+    ref: link.ref,
+    from: { ...state.from }, to: { ...state.to },
+    km, minutes: r.sec != null ? Math.round(r.sec * k / 60) : null,
+    pricePerKm: p, roundTrip: state.round, total: Math.round(km * p), currency: "RUB",
+    estimate: r.kind === "approx",
+  };
+}
+
+$("send").addEventListener("click", async () => {
+  const btn = $("send"), body = calcPayload();
+  let ok = false;
+  try {
+    // text/plain keeps it a "simple" request: no CORS preflight for the program to answer
+    const res = await fetch(link.callback, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+    ok = res.ok;
+  } catch {}
+  btn.textContent = ok ? "✓ Отправлено" : "Программа не ответила. Она запущена?";
+  btn.classList.toggle("done", ok);
+  setTimeout(() => { btn.textContent = "Отправить в программу"; btn.classList.remove("done"); }, 2000);
+});
 
 /* ---------- start with a real example ---------- */
 const savedPrice = store.get("price"); if (savedPrice != null) $("price").value = savedPrice;
@@ -605,7 +675,24 @@ state.round = !!store.get("round"); $("round").setAttribute("aria-pressed", stat
 state.from = store.get("from") || { name: "Москва", lat: 55.7558, lon: 37.6173 };
 state.to = store.get("to") || { name: "Казань", lat: 55.7963, lon: 49.1088 };
 fields.from.set(state.from); fields.to.set(state.to);
-update();
+const params = new URLSearchParams(location.search);
+const cb = params.get("callback");
+if (cb && isLocalUrl(cb)) link.callback = cb;
+if (["from", "to", "price", "round", "ref"].some(k => params.has(k))) applyRequest(Object.fromEntries(params));
+else update();
+
+if (location.hash === "#test") {
+  for (const [v, want] of [["40", 40], ["1 000,5", 1000.5], ["-5", 0], ["abc", 0]]) {
+    $("price").value = v; console.assert(price() === want, "price", v, price());
+  }
+  console.assert(fmtTime(90000) === "1 д 1 ч" && fmtTime(5400) === "1 ч 30 мин", "fmtTime");
+  Object.assign(state, { from: { name: "A", lat: 55.75, lon: 37.62 }, to: { name: "B", lat: 55.79, lon: 49.11 }, route: { km: 834.4, sec: 36000, kind: "road" }, round: true });
+  $("price").value = "40"; render();
+  console.assert($("total").textContent.replace(/\s/g, "") === "66720₽", "total", $("total").textContent);
+  const pl = calcPayload();
+  console.assert(pl.km === 1668 && pl.total === 66720 && pl.minutes === 1200 && pl.roundTrip, "payload", pl);
+  console.log("versta self-check done");
+}
 </script>
 </body>
 </html>

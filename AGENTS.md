@@ -5,6 +5,7 @@ Single-page site that calculates the road distance between any two points in Rus
 ## Files
 
 - `index.html` is the entire app: markup, CSS and JS in one file. No build step, no package manager.
+- `examples/vbnet/` holds the VB.NET code to drop into the owner's program (see "Link with the owner's program").
 - `.claude/launch.json` holds a local static server config (`python3 -m http.server 8765`) for previewing.
 
 Opening `index.html` directly from disk (`file://`) must keep working, since that is how the owner uses it. Test both ways.
@@ -32,12 +33,23 @@ Fonts come from Google Fonts: Unbounded for display, Onest for body text.
 - `localStorage` (`versta:*` keys, wrapped in try/catch) remembers the last points, the price and the round-trip toggle.
 - "Скопировать расчёт" copies a multi-line report. It uses a synchronous `execCommand("copy")` fallback first because `navigator.clipboard` is unreliable on `file://`.
 
+## Link with the owner's program
+
+The owner's window-calculation program (VB.NET, .NET 10, WinForms) talks to the site through a listener in the program itself. A static page can't be an endpoint. No third-party libraries on either side, as the owner asked.
+
+- **In:** URL parameters `from`, `to` (address text or `lat,lon`), `price`, `round` (`1`/`0`) and `ref` (an order id that is echoed back). A request with addresses resets `round` to one way unless it says otherwise. `applyRequest()` handles this.
+- **Out:** "Отправить в программу" is always visible next to a result. It POSTs JSON as `text/plain` (a simple request, no CORS preflight) to `http://localhost:5055/versta/`, or to `?callback=` when the link names another localhost address. If nothing answers, the button says "Программа не ответила. Она запущена?".
+- **Payload** (`calcPayload()`): `{ref, from:{name,lat,lon}, to:{…}, km, minutes, pricePerKm, roundTrip, total, currency:"RUB", estimate}`. `km` and `minutes` are already doubled for a round trip.
+- **Program side:** `examples/vbnet/VerstaListener.vb` (an `HttpListener` with setup steps in its header comment) and `VerstaResult.vb` (the model and `BuildUrl`). The listener accepts only `Origin` values `https://kh-mitya.github.io` and `null` (index.html opened from disk), and raises its event on the form's thread. Neither file has been compiled here, because this Mac has no .NET.
+- The `#test` self-check sits at the very end of the script, because it calls `render()`, which needs `link`.
+
 ## Lessons learned (don't repeat these)
 
 - **Basemap freshness matters.** Esri World Street Map is effectively frozen and lacks roads like M-12 (opened 2023), so correct routes looked like they cut through forest. Use a basemap built from current OSM data, like OpenFreeMap.
 - CARTO basemaps now require an API key and show "API KEY REQUIRED" tiles.
 - `tile.openstreetmap.org` requires a Referer header, and `file://` pages don't send one. Avoid it.
 - OSRM `overview=simplified` gives about 27 points for Moscow → Kazan, which draws as straight chords that look like a railway. Keep `overview=full`.
+- Preview: the app's `site` preview can keep serving an old folder on port 8765. Check `lsof -iTCP:8765` or serve with `python3 -m http.server 8766 --directory .`.
 - The OpenFreeMap dark style was hard to read, so the map stays light in dark mode: `#map` re-scopes the light color tokens for pins, route and popup.
 - Leaflet/MapLibre: fit the map *after* the container has its final size. A `ResizeObserver` on `#map` handles this. Don't animate fits.
 - A claude.ai Artifact cannot host this app because its sandbox blocks all fetch, XHR and tile requests to other hosts. An offline variant would need a precomputed distance matrix, which limits it to a fixed city list. The owner wants arbitrary addresses, so the app stays a regular static site.
