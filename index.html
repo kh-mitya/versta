@@ -135,8 +135,17 @@ body {
 
 .foot { margin-top: auto; font-size: 12px; color: var(--muted); }
 .foot a { color: inherit; }
+.foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.foot .gh { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin: -6px -6px -6px 0; border-radius: 8px; transition: color .15s; }
+.foot .gh:hover, .foot .gh:focus-visible { color: var(--fg); }
+.foot .gh svg { width: 16px; height: 16px; fill: currentColor; }
 
-#map { height: 100%; background: var(--bg); }
+/* The map always stays light: the dark basemap was hard to read. Light tokens are re-scoped here so pins, route and popup match it. */
+#map {
+  --bg: #f3f4f6; --panel: #ffffff; --fg: #16191f; --muted: #6b7280; --line: #e2e5ea;
+  --accent: #1f4fd1; --accent-soft: #e6ecfb; --mark: #f2b705; --danger: #b42318;
+  color-scheme: light; height: 100%; background: var(--bg); color: var(--fg);
+}
 .picker .maplibregl-popup-content { background: var(--panel); color: var(--fg); border-radius: 12px; padding: 6px; box-shadow: 0 10px 28px rgba(0,0,0,.2); }
 .picker.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--panel); }
 .picker.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--panel); }
@@ -214,7 +223,8 @@ body {
       </div>
     </section>
 
-    <div class="foot">Поиск: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></div>
+    <div class="foot"><span>Поиск: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></span>
+      <a class="gh" href="https://github.com/kh-mitya/versta" target="_blank" rel="noopener" title="Код на GitHub" aria-label="Код на GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a></div>
   </aside>
   <div class="mapwrap"><div id="map"></div><div class="maphint">Нажмите на карту, чтобы поставить точку. Метки можно перетаскивать</div></div>
 </div>
@@ -276,13 +286,11 @@ const store = {
 };
 
 /* ---------- map (OpenFreeMap vector tiles: fresh OSM data, incl. new roads like M-12) ---------- */
-const dark = matchMedia("(prefers-color-scheme: dark)");
-const isDark = () => document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : dark.matches;
-const styleUrl = () => `https://tiles.openfreemap.org/styles/${isDark() ? "dark" : "liberty"}`;
-const map = new maplibregl.Map({ container: "map", style: styleUrl(), center: [60, 56], zoom: 3, attributionControl: false, dragRotate: false, pitchWithRotate: false });
+// Always the light style, even in dark mode: the dark basemap is hard to read.
+const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [60, 56], zoom: 3, attributionControl: false, dragRotate: false, pitchWithRotate: false });
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
-const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+const accent = () => getComputedStyle(map.getContainer()).getPropertyValue("--accent").trim();
 const EMPTY = { type: "FeatureCollection", features: [] };
 
 map.on("style.load", () => {
@@ -297,12 +305,11 @@ map.on("style.load", () => {
   }
   map.addSource("route", { type: "geojson", data: EMPTY });
   map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": isDark() ? "#0f1115" : "#ffffff", "line-width": 9, "line-opacity": .9 } }, firstSymbol);
+    paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .9 } }, firstSymbol);
   map.addLayer({ id: "route-line", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": accent(), "line-width": 5 } }, firstSymbol);
   drawMap(false);
 });
-dark.addEventListener?.("change", () => map.setStyle(styleUrl(), { diff: false })); // full reload so style.load re-adds the route and Russian labels
 
 const markers = {};
 function marker(which) {
