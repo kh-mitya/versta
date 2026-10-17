@@ -5,6 +5,7 @@ Single-page site that calculates the road distance between any two points in Rus
 ## Files
 
 - `index.html` is the entire app: markup, CSS and JS in one file. No build step, no package manager.
+- `examples/vbnet/` holds sample VB.NET code for the owner's program (see "Link with the owner's program").
 - `.claude/launch.json` holds a local static server config (`python3 -m http.server 8765`) for previewing.
 
 Opening `index.html` directly from disk (`file://`) must keep working, since that is how the owner uses it. Test both ways.
@@ -31,6 +32,15 @@ Fonts come from Google Fonts: Unbounded for display, Onest for body text.
 - The route line is drawn in the `route-casing` and `route-line` layers, inserted below the first symbol layer so labels stay on top. Map labels are switched to `name:ru`, but road shields (`ref`) are left alone.
 - `localStorage` (`versta:*` keys, wrapped in try/catch) remembers the last points, the price and the round-trip toggle.
 - "Скопировать расчёт" copies a multi-line report. It uses a synchronous `execCommand("copy")` fallback first because `navigator.clipboard` is unreliable on `file://`.
+
+## Link with the owner's program
+
+The owner's window-calculation program (VB.NET, .NET 10, WinForms) talks to the site with no server of ours:
+
+- **In:** URL parameters `from`, `to` (address text or `lat,lon`), `price`, `round` (`1`), `ref` (an order id echoed back). Inside WebView2 the program can also post a JSON message with the same keys to change the route without reloading. `applyRequest()` handles both.
+- **Out:** the "Отправить в программу" button appears only when there is a target. In WebView2 (`window.chrome.webview`) it calls `postMessage(payload)`. Otherwise it POSTs to `?callback=`, which must be `localhost`, `127.0.0.1` or `[::1]`, sending `text/plain` so the request needs no CORS preflight.
+- **Payload** (`calcPayload()`): `{ref, from:{name,lat,lon}, to:{…}, km, minutes, pricePerKm, roundTrip, total, currency:"RUB", estimate}`. `km` and `minutes` are already doubled for a round trip.
+- VB.NET examples are in `examples/vbnet/`: `VerstaResult.vb` (model and `BuildUrl`), `VerstaForm.vb` (WebView2, the recommended option) and `VerstaListener.vb` (`HttpListener` for the callback option). They have not been compiled here, because this Mac has no .NET.
 
 ## Lessons learned (don't repeat these)
 

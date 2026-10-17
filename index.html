@@ -127,6 +127,9 @@ body {
   font: 500 14px var(--font-body); cursor: pointer;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { color: #fff; opacity: .9; }
 .btn.done { background: var(--accent); border-color: var(--accent); color: #fff; }
 .loading .total, .loading .stats { opacity: .35; transition: opacity .2s; }
 
@@ -205,7 +208,10 @@ body {
         <div class="stat"><b id="time">—</b><span>в пути</span></div>
       </div>
       <div class="note" id="note" hidden></div>
-      <button class="btn" id="copy" hidden>Скопировать расчёт</button>
+      <div class="actions">
+        <button class="btn primary" id="send" hidden>Отправить в программу</button>
+        <button class="btn" id="copy" hidden>Скопировать расчёт</button>
+      </div>
     </section>
 
     <div class="foot">Поиск: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></div>
@@ -515,7 +521,7 @@ function fmtTime(sec) {
 }
 function render() {
   const r = state.route, note = $("note");
-  note.hidden = true; note.className = "note"; $("copy").hidden = true;
+  note.hidden = true; note.className = "note"; $("copy").hidden = true; $("send").hidden = true;
   if (!state.from || !state.to || !r) {
     $("total").textContent = "—"; $("dist").textContent = "—"; $("time").textContent = "—";
     $("formula").textContent = state.from || state.to ? "Выберите второй город" : "Выберите два города";
@@ -539,6 +545,7 @@ function render() {
     note.hidden = false;
   }
   $("copy").hidden = false;
+  $("send").hidden = !link.target;
 }
 
 $("price").addEventListener("input", () => { store.set("price", $("price").value); render(); });
@@ -592,13 +599,104 @@ if (location.hash === "#test") {
   console.log("versta self-check done");
 }
 
+/* ---------- link with a program ----------
+   In:  ?from=…&to=…&price=40&round=1&ref=… (text address or "lat,lon"),
+        or, inside WebView2, a message {from, to, price, round, ref}.
+   Out: "Отправить в программу" sends the calculation as JSON to WebView2
+        (chrome.webview.postMessage) or POSTs it to ?callback=http://localhost:PORT/… */
+const link = { ref: null, target: null, callback: null };
+const webview = window.chrome?.webview;
+if (webview) link.target = "webview";
+
+function isLocalUrl(u) {
+  try { const h = new URL(u).hostname; return ["localhost", "127.0.0.1", "[::1]"].includes(h); } catch { return false; }
+}
+
+async function resolvePlace(q) {
+  if (q && typeof q === "object" && isFinite(q.lat) && isFinite(q.lon)) return { name: q.name || `${q.lat}, ${q.lon}`, lat: +q.lat, lon: +q.lon };
+  q = String(q || "").trim();
+  if (!q) return null;
+  const m = q.match(/^(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)$/);
+  if (m) return { name: q, lat: +m[1], lon: +m[2] };
+  const city = CITIES.find(c => c.key === norm(q));
+  if (city) return { name: city.name, lat: city.lat, lon: city.lon };
+  const data = await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&bbox=19,41,180,82`)).json();
+  const f = data.features.find(f => f.properties.countrycode === "RU");
+  if (!f) return null;
+  const pl = toPlace(f);
+  return { name: pl.full || pl.name, lat: pl.lat, lon: pl.lon };
+}
+
+async function applyRequest(req) {
+  if (req.ref != null) link.ref = String(req.ref);
+  if (req.price != null && req.price !== "") { $("price").value = String(req.price); store.set("price", $("price").value); }
+  if (req.round != null) {
+    state.round = ["1", "true", "yes", "да"].includes(String(req.round).toLowerCase());
+    $("round").setAttribute("aria-pressed", state.round);
+  }
+  if (req.from == null && req.to == null) { render(); return; }
+  $("formula").textContent = "Ищем адреса…";
+  const missing = [];
+  for (const which of ["from", "to"]) {
+    if (req[which] == null || req[which] === "") continue;
+    let p = null;
+    try { p = await resolvePlace(req[which]); } catch {}
+    if (p) { state[which] = p; store.set(which, p); }
+    else { state[which] = null; missing.push(String(req[which])); }
+    fields[which].set(p || { name: String(req[which]) });
+  }
+  await update();
+  if (missing.length) {
+    const note = $("note");
+    note.textContent = `Не нашли: ${missing.join(", ")}. Уточните адрес в поле.`;
+    note.className = "note err"; note.hidden = false;
+  }
+}
+
+function calcPayload() {
+  const r = state.route, k = state.round ? 2 : 1;
+  const km = Math.round(r.km) * k, p = price();
+  return {
+    ref: link.ref,
+    from: { ...state.from }, to: { ...state.to },
+    km, minutes: r.sec != null ? Math.round(r.sec * k / 60) : null,
+    pricePerKm: p, roundTrip: state.round, total: Math.round(km * p), currency: "RUB",
+    estimate: r.kind === "approx",
+  };
+}
+
+$("send").addEventListener("click", async () => {
+  const btn = $("send"), body = calcPayload();
+  let ok = false;
+  try {
+    if (link.target === "webview") { webview.postMessage(body); ok = true; }
+    else {
+      const res = await fetch(link.callback, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+      ok = res.ok;
+    }
+  } catch {}
+  btn.textContent = ok ? "✓ Отправлено" : "Программа не ответила";
+  btn.classList.toggle("done", ok);
+  setTimeout(() => { btn.textContent = "Отправить в программу"; btn.classList.remove("done"); }, 2000);
+});
+
+webview?.addEventListener("message", e => {
+  let d = e.data;
+  if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+  if (d && typeof d === "object") applyRequest(d);
+});
+
 /* ---------- start with a real example ---------- */
 const savedPrice = store.get("price"); if (savedPrice != null) $("price").value = savedPrice;
 state.round = !!store.get("round"); $("round").setAttribute("aria-pressed", state.round);
 state.from = store.get("from") || { name: "Москва", lat: 55.7558, lon: 37.6173 };
 state.to = store.get("to") || { name: "Казань", lat: 55.7963, lon: 49.1088 };
 fields.from.set(state.from); fields.to.set(state.to);
-update();
+const params = new URLSearchParams(location.search);
+const cb = params.get("callback");
+if (cb && isLocalUrl(cb) && !link.target) { link.callback = cb; link.target = "callback"; }
+if (["from", "to", "price", "round", "ref"].some(k => params.has(k))) applyRequest(Object.fromEntries(params));
+else update();
 </script>
 </body>
 </html>
