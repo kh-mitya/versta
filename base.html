@@ -7,25 +7,10 @@
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <style>
 /* Only the map. It always stays light, like in index.html, so the tokens have no dark variant. */
-:root {
-  --bg: #f3f4f6;
-  --panel: #ffffff;
-  --fg: #16191f;
-  --accent: #1f4fd1;
-  --base: #d93025;
-  --danger: #b42318;
-  color-scheme: light;
-}
+:root { --bg: #f3f4f6; --accent: #1f4fd1; color-scheme: light; }
 html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
-body { background: var(--bg); color: var(--fg); font: 500 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+body { background: var(--bg); }
 .maplibregl-canvas { cursor: crosshair; }
-
-/* Pins with a caption, like Yandex "stretchy" icons: the tail points at the spot. */
-.tag { --c: var(--accent); position: relative; margin-bottom: 7px; padding: 6px 10px; border-radius: 8px; background: var(--c); color: #fff; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
-.tag::after { content: ""; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: var(--c); }
-.tag.base { --c: var(--base); }
-.tag.to { cursor: grab; }
-.tag.err { --c: var(--danger); }
 </style>
 </head>
 <body>
@@ -33,102 +18,47 @@ body { background: var(--bg); color: var(--fg); font: 500 13px/1 system-ui, -app
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
-/* The start point is fixed. Change it only here. */
+/* Distance is measured by road from here. It is not shown on the map. */
 const BASE = { lat: 55.179161, lon: 37.398409 };
 
-/* A click builds the route from BASE. When it is done, the program gets
-   "lat,lon,km" through window.chrome.webview.postMessage (WebView2), e.g.
-   "55.100000,37.500000,47.3". If no route was found, km is left out: "lat,lon". */
+/* A click drops a pin and sends the program "lat,lon,km" through
+   window.chrome.webview.postMessage (WebView2), e.g. "55.100000,37.500000,47.3".
+   If there is no road route (or the routing service fails), km is 0. */
 const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [BASE.lon, BASE.lat], zoom: 9, attributionControl: false, dragRotate: false, pitchWithRotate: false, doubleClickZoom: false });
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
 map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
-const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const EMPTY = { type: "FeatureCollection", features: [] };
-const state = { to: null, route: null };
 
 map.on("style.load", () => {
   // Russian labels everywhere; road shields (ref) stay as they are.
   const ru = ["coalesce", ["get", "name:ru"], ["get", "name"]];
-  let firstSymbol;
   for (const l of map.getStyle().layers) {
     if (l.type !== "symbol") continue;
-    firstSymbol ??= l.id;
     const tf = JSON.stringify(l.layout?.["text-field"] ?? "");
     if (tf.includes("name") && !tf.includes("ref")) map.setLayoutProperty(l.id, "text-field", ru);
   }
-  map.addSource("route", { type: "geojson", data: EMPTY });
-  map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .9 } }, firstSymbol);
-  map.addLayer({ id: "route-line", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": css("--accent"), "line-width": 5 } }, firstSymbol);
-  drawMap(false);
 });
 
-function tag(cls, text) {
-  const el = document.createElement("div");
-  el.className = "tag " + cls; el.textContent = text;
-  return el;
-}
-new maplibregl.Marker({ element: tag("base", "СВ ОКНА"), anchor: "bottom" }).setLngLat([BASE.lon, BASE.lat]).addTo(map);
-
-const toEl = tag("to", "Точка доставки");
-const toMarker = new maplibregl.Marker({ element: toEl, anchor: "bottom", draggable: true });
-toMarker.on("dragend", () => { const { lat, lng } = toMarker.getLngLat(); setTo(lat, lng); });
-function label(text, err = false) { toEl.textContent = text; toEl.classList.toggle("err", err); }
-
-function drawMap(fit = true) {
-  if (state.to) toMarker.setLngLat([state.to.lon, state.to.lat]).addTo(map);
-  const coords = state.route?.geometry || null;
-  map.getSource("route")?.setData(coords ? { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } : EMPTY);
-  if (!fit || !coords) return;
-  const b = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-  map.fitBounds(b, { padding: 64, maxZoom: 14, animate: false });
-}
-let rz;
-new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => map.resize(), 150); }).observe(document.getElementById("map"));
-
-map.on("click", e => {
-  if (e.originalEvent.target.closest?.(".tag")) return;
-  setTo(e.lngLat.lat, e.lngLat.lng);
-});
+const pin = new maplibregl.Marker({ color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() });
 
 let seq = 0, ctrl;
-async function setTo(lat, lon) {
-  const my = ++seq;
-  state.to = { lat, lon }; state.route = null;
-  label("Строим маршрут…");
-  drawMap(false);
-  try {
-    state.route = await getRoute(BASE, state.to);
-  } catch {
-    if (my !== seq) return; // a newer click aborted this one
-    state.route = { kind: "error" };
-  }
-  if (my !== seq) return;
-  const r = state.route, msg = [lat.toFixed(6), lon.toFixed(6)];
-  if (r.kind === "road") {
-    msg.push(r.km.toFixed(1));
-    label(`${r.km.toFixed(1).replace(".", ",")} км`);
-  } else {
-    label(r.kind === "noroad" ? "Нет дороги" : "Маршрут не построен, нажмите ещё раз", true);
-  }
-  drawMap(true);
-  try { window.chrome?.webview?.postMessage(msg.join(",")); } catch {}
-}
+map.on("click", async e => {
+  const { lat, lng: lon } = e.lngLat, my = ++seq;
+  pin.setLngLat([lon, lat]).addTo(map);
+  let km = 0;
+  try { km = await roadKm(BASE, { lat, lon }); } catch {}
+  if (my !== seq) return; // a newer click owns the answer
+  try { window.chrome?.webview?.postMessage(`${lat.toFixed(6)},${lon.toFixed(6)},${km ? km.toFixed(1) : 0}`); } catch {}
+});
 
-async function getRoute(a, b) {
+// Road distance in km, or 0 when OSRM finds no road.
+async function roadKm(a, b) {
   ctrl?.abort(); ctrl = new AbortController();
   const c = ctrl, timer = setTimeout(() => c.abort(), 20000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
     const data = await (await fetch(url, { signal: c.signal })).json();
-    if (data.code === "Ok" && data.routes?.length) {
-      const rt = data.routes[0];
-      return { km: rt.distance / 1000, geometry: rt.geometry.coordinates, kind: "road" };
-    }
-    if (data.code === "NoRoute") return { kind: "noroad" };
-    throw new Error(data.code || "error");
+    return data.code === "Ok" && data.routes?.length ? data.routes[0].distance / 1000 : 0;
   } finally { clearTimeout(timer); }
 }
 </script>
