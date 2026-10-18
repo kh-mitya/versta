@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Верста · от базы</title>
+<meta name="description" content="Маршрут по дорогам от базы до точки на карте: координаты точки и длина пути.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Same look as index.html: control column on the left, the map fills the rest; stacks on phones. */
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --fg: #16191f;
+  --muted: #6b7280;
+  --line: #e2e5ea;
+  --accent: #1f4fd1;
+  --accent-soft: #e6ecfb;
+  --mark: #f2b705;
+  --danger: #b42318;
+  --font-display: "Unbounded", "Onest", system-ui, sans-serif;
+  --font-body: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --r: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --panel: #171a21; --fg: #eef0f4; --muted: #8b93a3; --line: #262b35;
+    --accent: #6f95ff; --accent-soft: #1b2440; --mark: #f2c53d; --danger: #ff7a6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --panel: #171a21; --fg: #eef0f4; --muted: #8b93a3; --line: #262b35;
+  --accent: #6f95ff; --accent-soft: #1b2440; --mark: #f2c53d; --danger: #ff7a6b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font-body); -webkit-font-smoothing: antialiased; }
+.app { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; height: 100%; }
+.side {
+  background: var(--panel); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 28px; overflow-y: auto;
+  padding-block: 32px; padding-left: max(28px, env(safe-area-inset-left, 0px)); padding-right: 28px;
+}
+.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.brand h1 { font: 700 20px/1 var(--font-display); letter-spacing: -0.01em; margin: 0; }
+.brand span { color: var(--muted); font-size: 13px; }
+
+/* Two route points joined by a dashed centre line */
+.route { position: relative; display: grid; gap: 10px; }
+.route::before {
+  content: ""; position: absolute; left: 21px; top: 30px; bottom: 30px; width: 2px;
+  background: repeating-linear-gradient(to bottom, var(--mark) 0 6px, transparent 6px 12px);
+}
+.pt { position: relative; min-height: 60px; padding: 10px 16px 10px 44px; border-radius: var(--r); background: var(--bg); display: grid; align-content: center; }
+.pt .dot {
+  position: absolute; left: 15px; top: 50%; width: 14px; height: 14px; margin-top: -7px;
+  border-radius: 50%; border: 3px solid var(--accent); background: var(--panel); z-index: 1;
+}
+.pt.to .dot { background: var(--accent); }
+.pt small { font-size: 11px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.pt b { font-weight: 500; overflow-wrap: anywhere; }
+.pt.to.empty b { color: var(--muted); font-weight: 400; }
+
+.result { display: grid; gap: 18px; }
+.total { font: 700 clamp(38px, 9vw, 52px)/1 var(--font-display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.total .unit { color: var(--accent); }
+.stats { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+.stat { padding-top: 14px; display: grid; gap: 2px; }
+.stat output { font: 600 18px var(--font-body); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+/* Values stay empty for the program's parser until they are known; people see a dash. */
+#km:empty::before, .stat output:empty::before { content: "—"; }
+.note { font-size: 13px; color: var(--muted); }
+.note.err { color: var(--danger); }
+.loading .total, .loading .stats { opacity: .35; transition: opacity .2s; }
+.btn {
+  justify-self: start; height: 40px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--fg);
+  font: 500 14px var(--font-body); cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.foot { margin-top: auto; font-size: 12px; color: var(--muted); }
+.foot a { color: inherit; }
+
+/* The map always stays light, like in index.html. */
+#map {
+  --bg: #f3f4f6; --panel: #ffffff; --fg: #16191f; --muted: #6b7280; --line: #e2e5ea;
+  --accent: #1f4fd1; --accent-soft: #e6ecfb; --mark: #f2b705; --danger: #b42318;
+  color-scheme: light; height: 100%; background: var(--bg); color: var(--fg);
+}
+.picker .maplibregl-popup-content { background: var(--panel); color: var(--fg); border-radius: 12px; padding: 6px; box-shadow: 0 10px 28px rgba(0,0,0,.2); }
+.picker.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--panel); }
+.picker.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--panel); }
+.picker.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--panel); }
+.picker.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--panel); }
+.pick button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); font: 500 14px var(--font-body); cursor: pointer; }
+.pick button:hover { background: var(--accent-soft); }
+.pick .pin { width: 12px; height: 12px; outline-width: 2px; border-width: 2px; box-shadow: none; }
+.maphint { position: absolute; z-index: 500; left: 12px; top: 12px; padding: 6px 10px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); pointer-events: none; }
+.mapwrap { position: relative; min-width: 0; }
+.maplibregl-map { font: 13px var(--font-body); }
+.maplibregl-canvas { cursor: crosshair; }
+.pin { width: 18px; height: 18px; border-radius: 50%; border: 5px solid var(--accent); background: var(--panel); box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+.pin.end { cursor: grab; background: var(--accent); border-color: var(--panel); outline: 3px solid var(--accent); }
+
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  html, body { height: auto; }
+  .side {
+    border-right: 0; overflow: visible; gap: 24px; padding-block: 24px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  #map { height: 62vh; min-height: 380px; }
+  .foot { margin-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <h1>Верста</h1>
+      <span>маршрут от базы</span>
+    </div>
+
+    <div class="route">
+      <div class="pt from"><i class="dot"></i><small>Откуда</small><b>База · <span id="base"></span></b></div>
+      <div class="pt to empty" id="to-box"><i class="dot"></i><small>Куда</small><b id="to-name">Нажмите на карту и выберите «Сюда»</b></div>
+    </div>
+
+    <!-- For the program: #status, #lat, #lon, #km hold plain values (dot decimals, no spaces).
+         They are also in data-* attributes of #result. Read them only when status is "ok". -->
+    <section class="result" id="result" data-status="empty" aria-live="polite">
+      <div class="total"><output id="km"></output><span class="unit">&nbsp;км</span></div>
+      <div class="stats">
+        <div class="stat"><output id="lat"></output><span>широта</span></div>
+        <div class="stat"><output id="lon"></output><span>долгота</span></div>
+      </div>
+      <div class="note" id="note">Длина маршрута по дорогам от базы.</div>
+      <button class="btn" id="retry" hidden>Построить ещё раз</button>
+      <output id="status" hidden>empty</output>
+    </section>
+
+    <div class="foot">Маршрут: <a href="https://project-osrm.org" target="_blank" rel="noopener">OSRM</a> · адреса: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> · карта © <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></div>
+  </aside>
+  <div class="mapwrap"><div id="map"></div><div class="maphint">Нажмите на карту, чтобы выбрать точку. Метку можно перетаскивать</div></div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+/* The start point is fixed. Change it only here. */
+const BASE = { lat: 55.179161, lon: 37.398409 };
+
+const $ = id => document.getElementById(id);
+const state = { to: null, route: null };
+$("base").textContent = `${BASE.lat}, ${BASE.lon}`;
+
+/* ---------- map ---------- */
+const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [BASE.lon, BASE.lat], zoom: 8, attributionControl: false, dragRotate: false, pitchWithRotate: false });
+map.touchZoomRotate.disableRotation();
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+const accent = () => getComputedStyle(map.getContainer()).getPropertyValue("--accent").trim();
+const EMPTY = { type: "FeatureCollection", features: [] };
+
+map.on("style.load", () => {
+  // Russian labels everywhere; road shields (ref) stay as they are.
+  const ru = ["coalesce", ["get", "name:ru"], ["get", "name"]];
+  let firstSymbol;
+  for (const l of map.getStyle().layers) {
+    if (l.type !== "symbol") continue;
+    firstSymbol ??= l.id;
+    const tf = JSON.stringify(l.layout?.["text-field"] ?? "");
+    if (tf.includes("name") && !tf.includes("ref")) map.setLayoutProperty(l.id, "text-field", ru);
+  }
+  map.addSource("route", { type: "geojson", data: EMPTY });
+  map.addLayer({ id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .9 } }, firstSymbol);
+  map.addLayer({ id: "route-line", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": accent(), "line-width": 5 } }, firstSymbol);
+  drawMap(false);
+});
+
+const baseEl = document.createElement("div");
+baseEl.className = "pin"; baseEl.title = "База";
+new maplibregl.Marker({ element: baseEl }).setLngLat([BASE.lon, BASE.lat]).addTo(map);
+
+const toEl = document.createElement("div");
+toEl.className = "pin end";
+const toMarker = new maplibregl.Marker({ element: toEl, draggable: true });
+toMarker.on("dragend", () => { const { lat, lng } = toMarker.getLngLat(); setTo(lat, lng); });
+
+function drawMap(fit = true) {
+  if (state.to) toMarker.setLngLat([state.to.lon, state.to.lat]).addTo(map);
+  else toMarker.remove();
+  const coords = state.route?.geometry || null;
+  map.getSource("route")?.setData(coords ? { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } : EMPTY);
+  if (!fit || !state.to) return;
+  const all = coords || [[BASE.lon, BASE.lat], [state.to.lon, state.to.lat]];
+  const b = all.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(all[0], all[0]));
+  map.fitBounds(b, { padding: 56, maxZoom: 14, animate: false });
+}
+let rz;
+new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => { map.resize(); drawMap(); }, 150); }).observe($("map"));
+
+/* ---------- "Сюда" ---------- */
+const picker = new maplibregl.Popup({ closeButton: false, className: "picker", offset: 8 });
+map.on("click", e => {
+  if (e.originalEvent.target.closest?.(".pin")) return;
+  const { lat, lng } = e.lngLat;
+  const box = document.createElement("div");
+  box.className = "pick";
+  box.innerHTML = `<button><i class="pin end"></i>Сюда</button>`;
+  box.querySelector("button").addEventListener("click", () => { picker.remove(); setTo(lat, lng); });
+  picker.setLngLat(e.lngLat).setDOMContent(box).addTo(map);
+});
+
+let seq = 0, ctrl;
+async function setTo(lat, lon) {
+  const my = ++seq;
+  state.to = { lat, lon }; state.route = null;
+  const name = $("to-name");
+  name.textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+  $("to-box").classList.remove("empty");
+  publish("loading");
+  drawMap(false);
+  reverse(lat, lon, my);
+  try {
+    state.route = await getRoute(BASE, state.to);
+  } catch (e) {
+    if (my !== seq) return; // a newer click aborted this one
+    state.route = { kind: "error" };
+  }
+  if (my !== seq) return;
+  publish(state.route.kind === "road" ? "ok" : state.route.kind);
+  drawMap(true);
+}
+
+async function getRoute(a, b) {
+  ctrl?.abort(); ctrl = new AbortController();
+  const c = ctrl, timer = setTimeout(() => c.abort(), 20000);
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson`;
+    const data = await (await fetch(url, { signal: c.signal })).json();
+    if (data.code === "Ok" && data.routes?.length) {
+      const rt = data.routes[0];
+      return { km: rt.distance / 1000, geometry: rt.geometry.coordinates, kind: "road" };
+    }
+    if (data.code === "NoRoute") return { kind: "noroad" };
+    throw new Error(data.code || "error");
+  } finally { clearTimeout(timer); }
+}
+
+// A readable label for people only; the program gets the coordinates.
+async function reverse(lat, lon, my) {
+  try {
+    const f = (await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1`)).json()).features?.[0];
+    if (!f || my !== seq) return;
+    const p = f.properties;
+    const town = p.city || p.town || p.village || p.locality || p.county || "";
+    const street = p.street ? p.street + (p.housenumber ? ", " + p.housenumber : "") : (p.osm_key === "highway" ? p.name : "");
+    const label = [street || p.name, town].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(", ");
+    if (label) $("to-name").textContent = label;
+  } catch {}
+}
+
+/* ---------- output for people and for the program ---------- */
+const NOTES = {
+  empty: ["Длина маршрута по дорогам от базы.", false],
+  loading: ["Строим маршрут…", false],
+  ok: ["Маршрут по дорогам от базы до точки.", false],
+  noroad: ["До этой точки нет автомобильной дороги.", true],
+  error: ["Сервис маршрутов не ответил. Постройте ещё раз.", true],
+};
+function publish(status) {
+  const to = state.to, r = state.route;
+  const v = {
+    status,
+    lat: to ? to.lat.toFixed(6) : "",
+    lon: to ? to.lon.toFixed(6) : "",
+    km: status === "ok" ? r.km.toFixed(1) : "",
+  };
+  const box = $("result");
+  for (const k in v) { $(k).textContent = v[k]; box.dataset[k] = v[k]; }
+  box.classList.toggle("loading", status === "loading");
+  const [text, err] = NOTES[status];
+  $("note").textContent = text; $("note").className = err ? "note err" : "note";
+  $("retry").hidden = status !== "error";
+  // Inside the program's WebView2 the result also arrives as a WebMessageReceived event.
+  if (status !== "loading") try { window.chrome?.webview?.postMessage(v); } catch {}
+}
+$("retry").addEventListener("click", () => { if (state.to) setTo(state.to.lat, state.to.lon); });
+</script>
+</body>
+</html>

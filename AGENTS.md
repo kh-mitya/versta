@@ -5,6 +5,7 @@ Single-page site that calculates the road distance between any two points in Rus
 ## Files
 
 - `index.html` is the entire app: markup, CSS and JS in one file. No build step, no package manager.
+- `base.html` is a separate standalone page for the owner's program: the start is fixed at the base (`BASE`, 55.179161, 37.398409), a map click → «Сюда» builds the route, and the result sits in `#status` (`empty`/`loading`/`ok`/`noroad`/`error`), `#lat`, `#lon`, `#km` as plain numbers with a dot (also in `data-*` of `#result`, and sent via `chrome.webview.postMessage` inside WebView2). It shares styles and map setup with `index.html` but no code.
 - `examples/vbnet/` holds the VB.NET code to drop into the owner's program (see "Link with the owner's program").
 - `.claude/launch.json` holds a local static server config (`python3 -m http.server 8765`) for previewing.
 
