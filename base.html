@@ -114,8 +114,10 @@ function toPlace(f) {
   const address = [...new Set([name, town].filter(Boolean))].join(", ");
   return { name, address, region: [town !== name ? town : "", p.state].filter(Boolean).join(", "), lat, lon };
 }
+// lang=default gives OSM names, Russian in Russia. Without it Photon follows the
+// browser language, and an English Windows got the town in English.
 async function reverse(lat, lon) {
-  const f = (await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1`)).json()).features?.[0];
+  const f = (await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1&lang=default`)).json()).features?.[0];
   return f ? toPlace(f).address : "";
 }
 
@@ -149,7 +151,7 @@ function search() {
   timer = setTimeout(async () => {
     try {
       // lat/lon only bias the order: places near the base come first
-      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=15&lat=${BASE.lat}&lon=${BASE.lon}&bbox=19,41,180,82`;
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=15&lang=default&lat=${BASE.lat}&lon=${BASE.lon}&bbox=19,41,180,82`;
       const data = await (await fetch(url)).json();
       if (my !== qseq) return;
       const seen = new Set();
