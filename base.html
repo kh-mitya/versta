@@ -6,24 +6,58 @@
 <title>Расчёт доставки СВ ОКНА</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <style>
-/* Only the map. It always stays light, like in index.html, so the tokens have no dark variant. */
-:root { --bg: #f3f4f6; --accent: #1f4fd1; color-scheme: light; }
+/* The map and the search box on it always stay light, like the map in index.html, so the tokens have no dark variant. */
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --fg: #16191f;
+  --muted: #6b7280;
+  --line: #e2e5ea;
+  --accent: #1f4fd1;
+  --accent-soft: #e6ecfb;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
 html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
-body { background: var(--bg); }
+body { background: var(--bg); color: var(--fg); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .maplibregl-canvas { cursor: crosshair; }
+
+.search { position: absolute; z-index: 10; left: 12px; top: 12px; width: min(420px, calc(100% - 24px)); }
+.search input {
+  width: 100%; height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--fg); font-family: inherit; font-size: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15); outline: none;
+}
+.search input::placeholder { color: var(--muted); }
+.search input:focus { border-color: var(--accent); }
+.search ul {
+  margin: 6px 0 0; padding: 6px; list-style: none; max-height: 320px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.18);
+}
+.search li { display: grid; gap: 1px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.search li small { color: var(--muted); font-size: 12px; }
+.search li.active, .search li:hover { background: var(--accent-soft); }
+.search li.hint { color: var(--muted); cursor: default; background: none; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div class="search">
+  <input id="q" placeholder="Куда: город или адрес" autocomplete="off" spellcheck="false" aria-label="Куда">
+  <ul id="list" hidden></ul>
+</div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
 /* Distance is measured by road from here. It is not shown on the map. */
 const BASE = { lat: 55.179161, lon: 37.398409 };
 
-/* A click drops a pin and sends the program "lat,lon,km" through
-   window.chrome.webview.postMessage (WebView2), e.g. "55.100000,37.500000,47.3".
-   If there is no road route (or the routing service fails), km is 0. */
+/* A map click or a picked address drops a pin and sends the program
+   "lat,lon,km,address" through window.chrome.webview.postMessage (WebView2), e.g.
+   "55.100000,37.500000,47.3,улица Ленина, 5, Чехов". The address has commas of
+   its own, so it is always last. km is 0 when there is no road route or the
+   routing service fails; the address is empty when it can't be found. */
+const $ = id => document.getElementById(id);
 const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [BASE.lon, BASE.lat], zoom: 9, attributionControl: false, dragRotate: false, pitchWithRotate: false, doubleClickZoom: false });
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
@@ -41,15 +75,22 @@ map.on("style.load", () => {
 
 const pin = new maplibregl.Marker({ color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() });
 
+map.on("click", e => { $("q").blur(); pick(e.lngLat.lat, e.lngLat.lng); });
+
 let seq = 0, ctrl;
-map.on("click", async e => {
-  const { lat, lng: lon } = e.lngLat, my = ++seq;
+// address is known when it was picked in the search; a map click looks it up.
+async function pick(lat, lon, address) {
+  const my = ++seq;
   pin.setLngLat([lon, lat]).addTo(map);
-  let km = 0;
-  try { km = await roadKm(BASE, { lat, lon }); } catch {}
-  if (my !== seq) return; // a newer click owns the answer
-  try { window.chrome?.webview?.postMessage(`${lat.toFixed(6)},${lon.toFixed(6)},${km ? km.toFixed(1) : 0}`); } catch {}
-});
+  $("q").value = address || "";
+  const [km, addr] = await Promise.all([
+    roadKm(BASE, { lat, lon }).catch(() => 0),
+    address ?? reverse(lat, lon).catch(() => ""),
+  ]);
+  if (my !== seq) return; // a newer pick owns the answer
+  if (document.activeElement !== $("q")) $("q").value = addr;
+  try { window.chrome?.webview?.postMessage(`${lat.toFixed(6)},${lon.toFixed(6)},${km ? km.toFixed(1) : 0},${addr}`); } catch {}
+}
 
 // Road distance in km, or 0 when OSRM finds no road.
 async function roadKm(a, b) {
@@ -61,6 +102,76 @@ async function roadKm(a, b) {
     return data.code === "Ok" && data.routes?.length ? data.routes[0].distance / 1000 : 0;
   } finally { clearTimeout(timer); }
 }
+
+/* ---------- addresses (Photon) ---------- */
+// "улица, дом, город" for the program, plus the region to tell places apart in the list.
+function toPlace(f) {
+  const p = f.properties, [lon, lat] = f.geometry.coordinates;
+  const town = p.city || p.town || p.village || p.locality || p.county || "";
+  const street = p.street ? p.street + (p.housenumber ? ", " + p.housenumber : "") : "";
+  let name = p.name || street || town;
+  if (p.name && street && p.name !== p.street && p.osm_key !== "highway") name = p.name + ", " + street;
+  const address = [...new Set([name, town].filter(Boolean))].join(", ");
+  return { name, address, region: [town !== name ? town : "", p.state].filter(Boolean).join(", "), lat, lon };
+}
+async function reverse(lat, lon) {
+  const f = (await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1`)).json()).features?.[0];
+  return f ? toPlace(f).address : "";
+}
+
+let items = [], active = 0, timer, qseq = 0;
+function show() {
+  const list = $("list");
+  list.innerHTML = "";
+  items.forEach((it, i) => {
+    const li = document.createElement("li");
+    if (it.hint) { li.className = "hint"; li.textContent = it.hint; }
+    else {
+      li.innerHTML = "<span></span><small></small>";
+      li.firstChild.textContent = it.name;
+      li.lastChild.textContent = it.region;
+      if (i === active) li.className = "active";
+      li.addEventListener("mousedown", e => { e.preventDefault(); choose(it); });
+    }
+    list.appendChild(li);
+  });
+  list.hidden = !items.length;
+}
+function choose(it) {
+  items = []; show(); $("q").blur();
+  map.jumpTo({ center: [it.lon, it.lat], zoom: Math.max(map.getZoom(), 14) });
+  pick(it.lat, it.lon, it.address);
+}
+function search() {
+  const q = $("q").value.trim(), my = ++qseq;
+  clearTimeout(timer); active = 0;
+  if (q.length < 3) { items = []; show(); return; }
+  timer = setTimeout(async () => {
+    try {
+      // lat/lon only bias the order: places near the base come first
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=15&lat=${BASE.lat}&lon=${BASE.lon}&bbox=19,41,180,82`;
+      const data = await (await fetch(url)).json();
+      if (my !== qseq) return;
+      const seen = new Set();
+      items = data.features.filter(f => f.properties.countrycode === "RU").map(toPlace)
+        .filter(r => !seen.has(r.address + r.region) && seen.add(r.address + r.region)).slice(0, 8);
+      if (!items.length) items = [{ hint: "Ничего не нашли. Попробуйте «город, улица, дом»" }];
+    } catch {
+      if (my === qseq) items = [{ hint: "Поиск адресов сейчас недоступен" }];
+    }
+    show();
+  }, 300);
+}
+$("q").addEventListener("input", search);
+$("q").addEventListener("focus", () => $("q").select());
+$("q").addEventListener("blur", () => setTimeout(() => { $("list").hidden = true; }, 100));
+$("q").addEventListener("keydown", e => {
+  const real = items.filter(i => !i.hint);
+  if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(active + 1, real.length - 1); show(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(active - 1, 0); show(); }
+  else if (e.key === "Enter") { e.preventDefault(); if (real[active]) choose(real[active]); }
+  else if (e.key === "Escape") { $("list").hidden = true; }
+});
 </script>
 </body>
 </html>

@@ -5,7 +5,7 @@ Single-page site that calculates the road distance between any two points in Rus
 ## Files
 
 - `index.html` is the entire app: markup, CSS and JS in one file. No build step, no package manager.
-- `base.html` is a separate map-only page for the owner's program (WebView2), modeled on their Yandex `map-delivery.html`. A click drops a pin and posts the string `"lat,lon,km"` (e.g. `55.100000,37.500000,47.3`) via `chrome.webview.postMessage`, where km is the OSRM road distance from the hidden base (`BASE`, 55.179161, 37.398409), or `0` if there is no route or OSRM fails. No base marker, route line, labels or panel: the owner asked for nothing but the pin.
+- `base.html` is a separate map-only page for the owner's program (WebView2), modeled on their Yandex `map-delivery.html`. A map click or an address picked in the «Куда» search box (Photon, biased toward the base) drops a pin and posts the string `"lat,lon,km,address"` (e.g. `55.100000,37.500000,47.3,улица Ленина, 5, Чехов`) via `chrome.webview.postMessage`. km is the OSRM road distance from the hidden base (`BASE`, 55.179161, 37.398409), or `0` if there is no route or OSRM fails. The address has its own commas, so it is always last (the program splits with a limit of 4); for a click it comes from Photon reverse and is empty if not found. No base marker, route line, labels or panel: the owner asked for nothing but the pin and the search box.
 - `examples/vbnet/` holds the VB.NET code to drop into the owner's program (see "Link with the owner's program").
 - `.claude/launch.json` holds a local static server config (`python3 -m http.server 8765`) for previewing.
 
