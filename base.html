@@ -39,7 +39,7 @@ const BASE = { lat: 55.179161, lon: 37.398409 };
 /* A click builds the route from BASE. When it is done, the program gets
    "lat,lon,km" through window.chrome.webview.postMessage (WebView2), e.g.
    "55.100000,37.500000,47.3". If no route was found, km is left out: "lat,lon". */
-const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [BASE.lon, BASE.lat], zoom: 9, attributionControl: false, dragRotate: false, pitchWithRotate: false });
+const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty", center: [BASE.lon, BASE.lat], zoom: 9, attributionControl: false, dragRotate: false, pitchWithRotate: false, doubleClickZoom: false });
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
 map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
